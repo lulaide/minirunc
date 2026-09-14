@@ -37,6 +37,24 @@ OCI bundle 是容器运行时使用的一组本地文件，主要包含 bundle �
 
 解码成功不等于配置可以运行。例如 `{}` 可以解码为 `specs.Spec`，但缺少运行 Linux 容器需要的根文件系统配置。
 
+## rootfs 路径
+
+rootfs 是容器进程看到的根文件系统，包含程序、动态链接器、依赖库和系统目录。OCI bundle 通常将它放在 `rootfs/`，实际位置由 `root.path` 指定。
+
+在 POSIX 平台上，`root.path` 可以是绝对路径，也可以是相对于 bundle 的路径。例如 bundle 位于 `/run/example` 时：
+
+| 配置值 | 宿主侧 rootfs 路径 |
+| --- | --- |
+| `rootfs` | `/run/example/rootfs` |
+| `../rootfs` | `/run/rootfs` |
+| `/var/lib/rootfs` | `/var/lib/rootfs` |
+
+运行时分别保留配置中的 `root.path` 和解析后的宿主绝对路径。前者表达原始 OCI 配置，后者供文件检查和后续挂载使用。
+
+`root.readonly` 表示根文件系统在容器中是否只读，不改变调用方在宿主侧提供的文件。
+
+加载阶段可以检查 rootfs 是否存在并且是目录，但这只是早期错误检查。检查与实际挂载之间，路径内容仍可能变化，符号链接也可能指向其他位置。后续挂载实现仍需在正确的 mount namespace 中安全打开和解析路径。
+
 ## 参考
 
 - [OCI bundle 定义](https://github.com/opencontainers/runtime-spec/blob/v1.3.0/bundle.md)

@@ -10,8 +10,9 @@ import (
 )
 
 type Bundle struct {
-	Dir  string
-	Spec *specs.Spec
+	Dir        string
+	RootfsPath string
+	Spec       *specs.Spec
 }
 
 // LoadBundle reads and decodes the configuration in a bundle directory.
@@ -35,5 +36,36 @@ func LoadBundle(dir string) (*Bundle, error) {
 		return nil, fmt.Errorf("decode %q: expected a JSON object", configPath)
 	}
 
-	return &Bundle{Dir: absDir, Spec: config}, nil
+	rootfsPath, err := resolveRootfs(absDir, config.Root)
+	if err != nil {
+		return nil, err
+	}
+
+	return &Bundle{Dir: absDir, RootfsPath: rootfsPath, Spec: config}, nil
+}
+
+func resolveRootfs(bundleDir string, root *specs.Root) (string, error) {
+	if root == nil {
+		return "", fmt.Errorf("root: field is required")
+	}
+	if root.Path == "" {
+		return "", fmt.Errorf("root.path: field is required")
+	}
+
+	rootfsPath := root.Path
+	if !filepath.IsAbs(rootfsPath) {
+		rootfsPath = filepath.Join(bundleDir, rootfsPath)
+	} else {
+		rootfsPath = filepath.Clean(rootfsPath)
+	}
+
+	info, err := os.Stat(rootfsPath)
+	if err != nil {
+		return "", fmt.Errorf("root.path %q: %w", root.Path, err)
+	}
+	if !info.IsDir() {
+		return "", fmt.Errorf("root.path %q: not a directory", root.Path)
+	}
+
+	return rootfsPath, nil
 }

@@ -37,6 +37,26 @@ OCI bundle 是容器运行时使用的一组本地文件，主要包含 bundle �
 
 解码成功不等于配置可以运行。例如 `{}` 可以解码为 `specs.Spec`，但缺少运行 Linux 容器需要的根文件系统配置。
 
+### 基础校验与执行能力
+
+`LoadBundle` 负责读取、解码和 rootfs 文件检查；`ValidateSpec` 检查 Linux 初始化进程所需的基础配置。调用流程为：
+
+```text
+validate --bundle PATH -> LoadBundle -> ValidateSpec -> 输出检查结果
+```
+
+目前检查版本 `1.3.0`、root 和 process、非空可执行程序、绝对工作目录、环境变量格式、挂载目标、namespace 类型及重复项、namespace 路径，以及 masked/readonly 路径。错误包含字段位置，可以一次返回多项问题，不输出环境变量值。
+
+`args[0]` 可以是 `sh` 这样的程序名，不必是绝对路径；空的后续参数和空环境变量值也有效。这里不检查程序在 rootfs 中是否存在，实际执行时还涉及容器内 PATH、挂载和动态链接器。
+
+namespace 的 `path` 为空表示创建，非空必须是宿主侧绝对路径；没有配置的类型继承 runtime namespace。校验阶段不打开 namespace 文件，实际加入时仍需检查文件类型并处理系统调用错误。
+
+基础校验不是完整 JSON Schema 校验：`specs-go` 中的非指针数值字段不能区分未填写和显式零值，例如 `user.uid`、`user.gid`。当前也没有校验 capabilities、seccomp、cgroup、hooks 等配置的所有内部约束，这些规则随相应模块实现补齐。
+
+容器启动前还需要执行能力检查，拒绝明确请求但尚未实现的功能，防止忽略安全或资源限制。这个检查属于未来的启动流程，当前 `validate` 只报告基础校验结果。
+
+OCI 扩展规则要求忽略未知字段，但已知字段的非法值或不支持的值必须报错。因此 JSON 解码仍允许扩展字段，不能用 `DisallowUnknownFields` 一概拒绝。
+
 ## rootfs 路径
 
 rootfs 是容器进程看到的根文件系统，包含程序、动态链接器、依赖库和系统目录。OCI bundle 通常将它放在 `rootfs/`，实际位置由 `root.path` 指定。

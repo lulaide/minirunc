@@ -1,0 +1,2 @@
+# 本地 OCI bundle 包含解包后的 rootfs，不进入源码仓库。
+/testdata/bundles/

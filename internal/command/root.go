@@ -34,7 +34,7 @@ func operationFailed(operation string, err error) error {
 	return &operationError{operation: operation, err: err}
 }
 
-// Execute runs the command line and returns a process exit code.
+// Execute 执行命令行并返回进程退出码。
 func Execute(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	app := &application{stdout: stdout, stderr: stderr, logFormat: "text"}
 	root := app.rootCommand()

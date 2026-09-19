@@ -15,7 +15,7 @@ type Bundle struct {
 	Spec       *specs.Spec
 }
 
-// LoadBundle reads and decodes the configuration in a bundle directory.
+// LoadBundle 读取并解析 bundle 目录中的配置。
 func LoadBundle(dir string) (*Bundle, error) {
 	absDir, err := filepath.Abs(dir)
 	if err != nil {

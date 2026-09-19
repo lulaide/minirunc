@@ -11,8 +11,8 @@ import (
 
 const OCIVersion = "1.3.0"
 
-// ValidateSpec checks the baseline configuration for a Linux init process.
-// It does not check every OCI field or whether the runtime can execute it.
+// ValidateSpec 检查 Linux 容器初始化进程所需的基础配置。
+// 它不检查所有 OCI 字段，也不判断 runtime 是否已经具备相应执行能力。
 func ValidateSpec(config *specs.Spec) error {
 	if config == nil {
 		return errors.New("config: field is required")

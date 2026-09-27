@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 
+	"github.com/lulaide/minirunc/internal/container"
 	"github.com/spf13/cobra"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
@@ -36,6 +37,9 @@ func operationFailed(operation string, err error) error {
 
 // Execute 执行命令行并返回进程退出码。
 func Execute(ctx context.Context, args []string, stdout, stderr io.Writer) int {
+	if handled, code := container.HandleInit(args); handled {
+		return code
+	}
 	app := &application{stdout: stdout, stderr: stderr, logFormat: "text"}
 	root := app.rootCommand()
 	root.SetArgs(args)

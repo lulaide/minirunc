@@ -41,13 +41,20 @@ func readInitConfig(reader io.Reader) (*initConfig, error) {
 	if err := readInitMessage(reader, &config); err != nil {
 		return nil, err
 	}
-	if config == nil || config.Spec == nil {
-		return nil, errors.New("init config: OCI spec is required")
-	}
-	if !filepath.IsAbs(config.RootfsPath) || strings.ContainsRune(config.RootfsPath, '\x00') {
-		return nil, errors.New("init config: rootfsPath must be an absolute path without NUL")
+	if err := validateInitConfig(config); err != nil {
+		return nil, err
 	}
 	return config, nil
+}
+
+func validateInitConfig(config *initConfig) error {
+	if config == nil || config.Spec == nil {
+		return errors.New("init config: OCI spec is required")
+	}
+	if !filepath.IsAbs(config.RootfsPath) || strings.ContainsRune(config.RootfsPath, '\x00') {
+		return errors.New("init config: rootfsPath must be an absolute path without NUL")
+	}
+	return nil
 }
 
 func readInitResult(reader io.Reader) (*initResult, error) {

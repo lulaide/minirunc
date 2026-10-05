@@ -3,6 +3,7 @@ package container
 import (
 	"context"
 	"errors"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -34,6 +35,21 @@ func TestStartInitWithUbuntuBundle(t *testing.T) {
 		want   string
 	}{
 		{"successful isolation", func(*initConfig) {}, ""},
+		{"non-root process", func(c *initConfig) {
+			c.Spec.Process.User = specs.User{UID: 1000, GID: 1000, AdditionalGids: []uint32{1001, 1002}}
+			c.Spec.Process.Cwd = "/tmp"
+			c.Spec.Process.Rlimits = []specs.POSIXRlimit{{Type: "RLIMIT_NOFILE", Soft: 64, Hard: 128}}
+		}, ""},
+		{"missing working directory", func(c *initConfig) {
+			c.Spec.Process.Cwd = "/minirunc-no-such-directory"
+		}, "change working directory"},
+		{"inaccessible working directory", func(c *initConfig) {
+			c.Spec.Process.User = specs.User{UID: 1000, GID: 1000}
+			c.Spec.Process.Cwd = "/root"
+		}, "permission denied"},
+		{"resource limit exceeds kernel maximum", func(c *initConfig) {
+			c.Spec.Process.Rlimits = []specs.POSIXRlimit{{Type: "RLIMIT_NOFILE", Soft: 64, Hard: math.MaxUint64}}
+		}, "set resource limit RLIMIT_NOFILE"},
 		{"large configuration", func(c *initConfig) {
 			c.Spec.Process.Env = append(c.Spec.Process.Env, "PAYLOAD="+strings.Repeat("x", 256*1024))
 		}, ""},

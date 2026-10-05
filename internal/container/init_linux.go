@@ -52,7 +52,7 @@ func runInit() int {
 		return 1
 	}
 
-	// 只有 hostname 和 rootfs 初始化完成后才确认成功。
+	// 隔离环境和进程属性全部设置成功后才确认；失败时不能继续执行用户程序。
 	// 当前入口随即退出，尚未等待 start 或 exec 用户程序，因此不是 OCI running。
 	if err := writeInitMessage(resultWrite, initResult{Ready: true}); err != nil {
 		return 1
@@ -83,13 +83,26 @@ func setupInit(config *initConfig, parentMount, parentUTS *os.File) error {
 			return fmt.Errorf("set hostname: %w", err)
 		}
 	}
-	return linux.SetupRootfs(linux.RootfsConfig{
+	if err := linux.SetupRootfs(linux.RootfsConfig{
 		Path:          config.RootfsPath,
 		Readonly:      config.Spec.Root.Readonly,
 		Mounts:        config.Spec.Mounts,
 		MaskedPaths:   config.Spec.Linux.MaskedPaths,
 		ReadonlyPaths: config.Spec.Linux.ReadonlyPaths,
-	})
+	}); err != nil {
+		return err
+	}
+	process := config.Spec.Process
+	// 挂载和提高资源上限可能需要特权，必须在切换身份前完成。
+	// 后续 capabilities 需要围绕身份切换设置，不能全部放在降权之后。
+	if err := linux.SetupRlimits(process.Rlimits); err != nil {
+		return err
+	}
+	if err := linux.SetupUser(process.User); err != nil {
+		return err
+	}
+	// rootfs 已切换，cwd 是容器内路径；由最终用户的权限决定能否进入。
+	return linux.SetupWorkingDirectory(process.Cwd)
 }
 
 func requireNewNamespace(name string, namespaceType int, parent *os.File) error {

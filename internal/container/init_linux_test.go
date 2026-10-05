@@ -5,12 +5,14 @@ import (
 	"errors"
 	"os"
 	"os/exec"
+	"reflect"
 	"runtime"
 	"strings"
 	"syscall"
 	"testing"
 	"time"
 
+	specs "github.com/opencontainers/runtime-spec/specs-go"
 	"golang.org/x/sys/unix"
 )
 
@@ -97,11 +99,29 @@ func TestSetupInitWithUbuntuBundle(t *testing.T) {
 	if os.Getenv("MINIRUNC_INIT_TEST_CHILD") == "1" {
 		runtime.LockOSThread()
 		config := ubuntuInitConfig(t)
+		config.Spec.Process.User = specs.User{UID: 1000, GID: 1000, AdditionalGids: []uint32{1001, 1002}}
+		config.Spec.Process.Cwd = "/tmp"
+		config.Spec.Process.Rlimits = []specs.POSIXRlimit{{Type: "RLIMIT_NOFILE", Soft: 64, Hard: 128}}
 		if err := setupInit(config, os.NewFile(parentMountFD, "parent-mnt"), os.NewFile(parentUTSFD, "parent-uts")); err != nil {
 			t.Fatal(err)
 		}
 		if os.Getpid() != 1 {
 			t.Fatalf("container PID = %d, want 1", os.Getpid())
+		}
+		ruid, euid, suid := unix.Getresuid()
+		rgid, egid, sgid := unix.Getresgid()
+		if ruid != 1000 || euid != 1000 || suid != 1000 || rgid != 1000 || egid != 1000 || sgid != 1000 {
+			t.Fatalf("UIDs = %d/%d/%d, GIDs = %d/%d/%d", ruid, euid, suid, rgid, egid, sgid)
+		}
+		if groups, err := os.Getgroups(); err != nil || !reflect.DeepEqual(groups, []int{1001, 1002}) {
+			t.Fatalf("supplementary groups = %v, error %v", groups, err)
+		}
+		if cwd, err := os.Getwd(); err != nil || cwd != "/tmp" {
+			t.Fatalf("working directory = %q, error %v", cwd, err)
+		}
+		var limit unix.Rlimit
+		if err := unix.Getrlimit(unix.RLIMIT_NOFILE, &limit); err != nil || limit.Cur != 64 || limit.Max != 128 {
+			t.Fatalf("NOFILE = %+v, error %v", limit, err)
 		}
 		if name, err := os.Hostname(); err != nil || name != config.Spec.Hostname {
 			t.Fatalf("container hostname = %q, error %v", name, err)
@@ -127,7 +147,7 @@ func TestSetupInitWithUbuntuBundle(t *testing.T) {
 		if _, err := os.Stat("/.minirunc-oldroot"); !errors.Is(err, os.ErrNotExist) {
 			t.Fatal("old root is still reachable")
 		}
-		t.Log("Ubuntu init checks passed: PID 1, hostname, rootfs, procfs, readonly and masked paths")
+		t.Log("Ubuntu init checks passed: PID 1, hostname, rootfs, procfs, readonly and masked paths, user, groups, cwd, rlimits")
 		return
 	}
 	if os.Getenv("MINIRUNC_PRIVILEGED_TESTS") != "1" {

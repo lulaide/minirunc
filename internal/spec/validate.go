@@ -3,6 +3,7 @@ package spec
 import (
 	"errors"
 	"fmt"
+	"math"
 	"path"
 	"strings"
 
@@ -75,6 +76,43 @@ func validateProcess(process *specs.Process) []error {
 	}
 	if process.CommandLine != "" || process.User.Username != "" {
 		problems = append(problems, errors.New("process: commandLine and user.username are Windows-only fields"))
+	}
+	// Linux 的 UID/GID 使用 32 位无符号整数；全为 1 的值对应系统调用中的 -1，
+	// 在 setresuid/setresgid 中表示“不修改”，不能用作容器的目标身份。
+	if process.User.UID == math.MaxUint32 {
+		problems = append(problems, errors.New("process.user.uid: must not be 4294967295"))
+	}
+	if process.User.GID == math.MaxUint32 {
+		problems = append(problems, errors.New("process.user.gid: must not be 4294967295"))
+	}
+	for i, gid := range process.User.AdditionalGids {
+		if gid == math.MaxUint32 {
+			problems = append(problems, fmt.Errorf("process.user.additionalGids[%d]: must not be 4294967295", i))
+		}
+	}
+	problems = append(problems, validateRlimits(process.Rlimits)...)
+	return problems
+}
+
+func validateRlimits(limits []specs.POSIXRlimit) []error {
+	var problems []error
+	seen := make(map[string]bool)
+	for i, limit := range limits {
+		switch limit.Type {
+		case "RLIMIT_AS", "RLIMIT_CORE", "RLIMIT_CPU", "RLIMIT_DATA",
+			"RLIMIT_FSIZE", "RLIMIT_LOCKS", "RLIMIT_MEMLOCK", "RLIMIT_MSGQUEUE",
+			"RLIMIT_NICE", "RLIMIT_NOFILE", "RLIMIT_NPROC", "RLIMIT_RSS",
+			"RLIMIT_RTPRIO", "RLIMIT_RTTIME", "RLIMIT_SIGPENDING", "RLIMIT_STACK":
+		default:
+			problems = append(problems, fmt.Errorf("process.rlimits[%d].type: unknown Linux resource limit %q", i, limit.Type))
+		}
+		if seen[limit.Type] {
+			problems = append(problems, fmt.Errorf("process.rlimits[%d].type: duplicate type %q", i, limit.Type))
+		}
+		seen[limit.Type] = true
+		if limit.Soft > limit.Hard {
+			problems = append(problems, fmt.Errorf("process.rlimits[%d].soft: must not exceed hard", i))
+		}
 	}
 	return problems
 }

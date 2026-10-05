@@ -1,6 +1,7 @@
 package spec
 
 import (
+	"math"
 	"strings"
 	"testing"
 
@@ -29,6 +30,17 @@ func TestValidateSpec(t *testing.T) {
 		{"empty executable", func(s *specs.Spec) { s.Process.Args[0] = "" }, "process.args"},
 		{"argument NUL", func(s *specs.Spec) { s.Process.Args = []string{"sh", "a\x00b"} }, "process.args[1]"},
 		{"cwd", func(s *specs.Spec) { s.Process.Cwd = "work" }, "process.cwd"},
+		{"reserved UID", func(s *specs.Spec) { s.Process.User.UID = math.MaxUint32 }, "process.user.uid"},
+		{"reserved GID", func(s *specs.Spec) { s.Process.User.GID = math.MaxUint32 }, "process.user.gid"},
+		{"reserved additional GID", func(s *specs.Spec) { s.Process.User.AdditionalGids = []uint32{1000, math.MaxUint32} }, "process.user.additionalGids[1]"},
+		{"empty rlimit type", func(s *specs.Spec) { s.Process.Rlimits = []specs.POSIXRlimit{{}} }, "process.rlimits[0].type"},
+		{"unknown rlimit type", func(s *specs.Spec) { s.Process.Rlimits = []specs.POSIXRlimit{{Type: "RLIMIT_UNKNOWN"}} }, "process.rlimits[0].type"},
+		{"duplicate rlimit", func(s *specs.Spec) {
+			s.Process.Rlimits = []specs.POSIXRlimit{{Type: "RLIMIT_NOFILE"}, {Type: "RLIMIT_NOFILE"}}
+		}, "process.rlimits[1].type: duplicate"},
+		{"rlimit soft exceeds hard", func(s *specs.Spec) {
+			s.Process.Rlimits = []specs.POSIXRlimit{{Type: "RLIMIT_NOFILE", Soft: 1025, Hard: 1024}}
+		}, "process.rlimits[0].soft"},
 		{"environment", func(s *specs.Spec) { s.Process.Env = []string{"TOKEN"} }, "process.env[0]"},
 		{"empty env name", func(s *specs.Spec) { s.Process.Env = []string{"=secret"} }, "process.env[0]"},
 		{"environment NUL", func(s *specs.Spec) { s.Process.Env = []string{"TOKEN=secret\x00"} }, "process.env[0]"},
@@ -55,6 +67,28 @@ func TestValidateSpec(t *testing.T) {
 				t.Fatal("validation error exposes an environment value")
 			}
 		})
+	}
+}
+
+func TestValidateSpecAcceptsProcessAttributes(t *testing.T) {
+	config := baselineSpec()
+	config.Process.User = specs.User{UID: math.MaxUint32 - 1, GID: 1000, AdditionalGids: []uint32{0, 1001, math.MaxUint32 - 1}}
+	config.Process.Cwd = "/work"
+	// 这里只验证配置，不查宿主机的用户数据库、目录或当前资源上限。
+	for _, resource := range []string{
+		"RLIMIT_AS", "RLIMIT_CORE", "RLIMIT_CPU", "RLIMIT_DATA",
+		"RLIMIT_FSIZE", "RLIMIT_LOCKS", "RLIMIT_MEMLOCK", "RLIMIT_MSGQUEUE",
+		"RLIMIT_NICE", "RLIMIT_NOFILE", "RLIMIT_NPROC", "RLIMIT_RSS",
+		"RLIMIT_RTPRIO", "RLIMIT_RTTIME", "RLIMIT_SIGPENDING", "RLIMIT_STACK",
+	} {
+		config.Process.Rlimits = append(config.Process.Rlimits, specs.POSIXRlimit{Type: resource, Soft: math.MaxUint64, Hard: math.MaxUint64})
+	}
+	if err := ValidateSpec(config); err != nil {
+		t.Fatal(err)
+	}
+	config.Process.Rlimits = []specs.POSIXRlimit{{Type: "RLIMIT_CORE", Soft: 0, Hard: 0}, {Type: "RLIMIT_NOFILE", Soft: 1024, Hard: 4096}}
+	if err := ValidateSpec(config); err != nil {
+		t.Fatal(err)
 	}
 }
 

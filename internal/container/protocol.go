@@ -17,6 +17,8 @@ import (
 type initConfig struct {
 	RootfsPath string      `json:"rootfsPath"`
 	Spec       *specs.Spec `json:"spec"`
+	// 由宿主 runtime 指定的授权父树，不属于 OCI 配置，也不传给子进程。
+	CgroupParent string `json:"-"`
 }
 
 // Ready 表示当前初始化步骤成功，不等同于 OCI running 状态。

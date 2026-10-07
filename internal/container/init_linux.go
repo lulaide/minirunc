@@ -6,6 +6,7 @@ import (
 	"runtime"
 
 	"github.com/lulaide/minirunc/internal/linux"
+	specs "github.com/opencontainers/runtime-spec/specs-go"
 	"golang.org/x/sys/unix"
 )
 
@@ -78,6 +79,18 @@ func setupInit(config *initConfig, parentMount, parentUTS *os.File) error {
 	// 比对完成后不再需要宿主 namespace 句柄，及时关闭，避免后续继承。
 	_ = parentMount.Close()
 	_ = parentUTS.Close()
+	if config.Spec.Linux.CgroupsPath != "" {
+		for _, namespace := range config.Spec.Linux.Namespaces {
+			if namespace.Type == specs.CgroupNamespace {
+				// 父进程已在发送配置前把整个进程迁入目标组。现在创建 namespace，
+				// 才能让目标 cgroup 成为当前初始化线程的路径视图根；必须保持线程锁定。
+				if err := unix.Unshare(unix.CLONE_NEWCGROUP); err != nil {
+					return fmt.Errorf("create cgroup namespace: %w", err)
+				}
+				break
+			}
+		}
+	}
 	if config.Spec.Hostname != "" {
 		if err := unix.Sethostname([]byte(config.Spec.Hostname)); err != nil {
 			return fmt.Errorf("set hostname: %w", err)

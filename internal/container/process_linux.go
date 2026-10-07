@@ -2,11 +2,13 @@ package container
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"syscall"
 
+	"github.com/lulaide/minirunc/internal/cgroup"
 	"github.com/lulaide/minirunc/internal/linux"
 	"github.com/lulaide/minirunc/internal/spec"
 	"golang.org/x/sys/unix"
@@ -14,14 +16,25 @@ import (
 
 // startInit 重新执行指定的 minirunc 可执行文件，并完成初始化通信。
 // 正式启动时 executable 使用 /proc/self/exe，表示当前进程运行的程序。
-// 当前子进程完成 namespace、hostname 和 rootfs 初始化后退出，尚不执行用户程序。
-func startInit(ctx context.Context, executable string, config *initConfig) error {
+// 当前子进程完成隔离与进程属性初始化后退出，尚不执行用户程序。
+func startInit(ctx context.Context, executable string, config *initConfig) (returnErr error) {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
 	flags, err := initCloneFlags(config)
 	if err != nil {
 		return err
+	}
+	group, err := prepareInitCgroup(config)
+	if err != nil {
+		return err
+	}
+	if group != nil {
+		// 这个 defer 先注册，后注册的子进程 Kill/Wait 会先执行，保证删除时没有任务。
+		// 清理失败也返回给入口，不能丢失资源残留的诊断。
+		defer func() {
+			returnErr = errors.Join(returnErr, group.Remove(), group.Close())
+		}()
 	}
 	// 打开 namespace 文件得到的是内核 namespace 对象的句柄，不是目录。
 	// 子进程用它们与自身的 namespace 比对，确认隔离确实已经建立。
@@ -81,6 +94,13 @@ func startInit(ctx context.Context, executable string, config *initConfig) error
 		}
 	}()
 
+	if group != nil {
+		if err := group.AddPID(child.Process.Pid); err != nil {
+			return fmt.Errorf("join init cgroup: %w", err)
+		}
+	}
+	// __init 正阻塞在配置读取上。先加入 cgroup，再发送完整配置并关闭写端，
+	// 现有管道就是初始化屏障，不需要额外增加一条“允许继续”的管道。
 	if err := writeInitMessage(configWrite, config); err != nil {
 		return err
 	}
@@ -90,7 +110,8 @@ func startInit(ctx context.Context, executable string, config *initConfig) error
 	}
 	result, err := readInitResult(resultRead)
 	if err != nil {
-		return fmt.Errorf("receive init result: %w", err)
+		// 取消会终止子进程并使管道出现 EOF，同时保留 context 错误供上层识别。
+		return errors.Join(fmt.Errorf("receive init result: %w", err), ctx.Err())
 	}
 	waitErr := child.Wait()
 	waited = true
@@ -101,6 +122,18 @@ func startInit(ctx context.Context, executable string, config *initConfig) error
 		return fmt.Errorf("wait for init process: %w", waitErr)
 	}
 	return nil
+}
+
+func prepareInitCgroup(config *initConfig) (*cgroup.Group, error) {
+	linuxConfig := config.Spec.Linux
+	if config.CgroupParent == "" {
+		if linuxConfig.CgroupsPath != "" || linuxConfig.Resources != nil {
+			return nil, fmt.Errorf("cgroup parent is required when linux.cgroupsPath or linux.resources is configured")
+		}
+		// 保留当前只验证隔离的内部入口；正式运行命令后续应始终指定授权父树。
+		return nil, nil
+	}
+	return cgroup.Create(config.CgroupParent, linuxConfig.CgroupsPath, linuxConfig.Resources)
 }
 
 func initCloneFlags(config *initConfig) (uintptr, error) {
@@ -121,6 +154,13 @@ func initCloneFlags(config *initConfig) (uintptr, error) {
 	// hostname 属于 UTS namespace；缺少隔离时设置它会影响宿主。
 	if flags&unix.CLONE_NEWNS == 0 {
 		return 0, fmt.Errorf("linux.namespaces: a new mount namespace is required for rootfs setup")
+	}
+	if config.Spec.Linux.CgroupsPath != "" {
+		if err := cgroup.ValidateName(config.Spec.Linux.CgroupsPath); err != nil {
+			return 0, err
+		}
+		// cgroup namespace 的根取决于创建时所在的 cgroup，必须等父进程迁移后再创建。
+		flags &^= unix.CLONE_NEWCGROUP
 	}
 	if config.Spec.Hostname != "" && flags&unix.CLONE_NEWUTS == 0 {
 		return 0, fmt.Errorf("linux.namespaces: a new UTS namespace is required for hostname")

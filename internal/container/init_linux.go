@@ -107,11 +107,13 @@ func setupInit(config *initConfig, parentMount, parentUTS *os.File) error {
 	}
 	process := config.Spec.Process
 	// 挂载和提高资源上限可能需要特权，必须在切换身份前完成。
-	// 后续 capabilities 需要围绕身份切换设置，不能全部放在降权之后。
 	if err := linux.SetupRlimits(process.Rlimits); err != nil {
 		return err
 	}
-	if err := linux.SetupUser(process.User); err != nil {
+	if err := linux.SetupCredentials(process.User, process.Capabilities); err != nil {
+		return err
+	}
+	if err := linux.SetNoNewPrivileges(process.NoNewPrivileges); err != nil {
 		return err
 	}
 	// rootfs 已切换，cwd 是容器内路径；由最终用户的权限决定能否进入。

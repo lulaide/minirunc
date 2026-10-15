@@ -91,6 +91,9 @@ func validateProcess(process *specs.Process) []error {
 		}
 	}
 	problems = append(problems, validateRlimits(process.Rlimits)...)
+	if _, err := ParseCapabilities(process.Capabilities); err != nil {
+		problems = append(problems, err)
+	}
 	return problems
 }
 

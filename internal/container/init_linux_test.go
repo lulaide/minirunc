@@ -113,6 +113,28 @@ func TestSetupInitWithUbuntuBundle(t *testing.T) {
 		if err := setupInit(config, os.NewFile(parentMountFD, "parent-mnt"), os.NewFile(parentUTSFD, "parent-uts")); err != nil {
 			t.Fatal(err)
 		}
+		// Ubuntu bundle 配置空能力集合和 noNewPrivileges=true，检查锁定线程的实际状态。
+		header := unix.CapUserHeader{Version: unix.LINUX_CAPABILITY_VERSION_3}
+		var capabilities [2]unix.CapUserData
+		if err := unix.Capget(&header, &capabilities[0]); err != nil || capabilities != ([2]unix.CapUserData{}) {
+			t.Fatalf("container capabilities = %+v, error %v", capabilities, err)
+		}
+		for number := 0; ; number++ {
+			present, err := unix.PrctlRetInt(unix.PR_CAPBSET_READ, uintptr(number), 0, 0, 0)
+			if errors.Is(err, unix.EINVAL) {
+				break
+			}
+			if err != nil || present != 0 {
+				t.Fatalf("bounding capability %d = %d, error %v", number, present, err)
+			}
+			ambient, err := unix.PrctlRetInt(unix.PR_CAP_AMBIENT, unix.PR_CAP_AMBIENT_IS_SET, uintptr(number), 0, 0)
+			if err != nil || ambient != 0 {
+				t.Fatalf("ambient capability %d = %d, error %v", number, ambient, err)
+			}
+		}
+		if value, err := unix.PrctlRetInt(unix.PR_GET_NO_NEW_PRIVS, 0, 0, 0, 0); err != nil || value != 1 {
+			t.Fatalf("container no_new_privs = %d, error %v", value, err)
+		}
 		if os.Getpid() != 1 {
 			t.Fatalf("container PID = %d, want 1", os.Getpid())
 		}
@@ -161,7 +183,7 @@ func TestSetupInitWithUbuntuBundle(t *testing.T) {
 		if _, err := os.Stat("/.minirunc-oldroot"); !errors.Is(err, os.ErrNotExist) {
 			t.Fatal("old root is still reachable")
 		}
-		t.Log("Ubuntu init checks passed: PID 1, hostname, rootfs, procfs, readonly and masked paths, user, groups, cwd, rlimits")
+		t.Log("Ubuntu init checks passed: PID 1, hostname, rootfs, procfs, readonly and masked paths, user, groups, cwd, rlimits, capabilities, no_new_privs")
 		return
 	}
 	if os.Getenv("MINIRUNC_PRIVILEGED_TESTS") != "1" {

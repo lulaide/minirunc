@@ -4,13 +4,16 @@ import (
 	"context"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/lulaide/minirunc/internal/cgroup"
 	specs "github.com/opencontainers/runtime-spec/specs-go"
+	"golang.org/x/sys/unix"
 )
 
 func testCgroupResources() *specs.LinuxResources {
@@ -62,6 +65,12 @@ func TestStartInitWithCgroup(t *testing.T) {
 		{"nonroot", executable, func(c *initConfig) {
 			c.Spec.Process.User = specs.User{UID: 1000, GID: 1000}
 			c.Spec.Process.Cwd = "/tmp"
+		}, "", 10 * time.Second},
+		{"retained-capability", executable, func(c *initConfig) {
+			c.Spec.Process.User = specs.User{UID: 1000, GID: 1000}
+			c.Spec.Process.Cwd = "/tmp"
+			names := []string{"CAP_CHOWN"}
+			c.Spec.Process.Capabilities = &specs.LinuxCapabilities{Bounding: names, Permitted: names, Effective: names, Inheritable: names, Ambient: names}
 		}, "", 10 * time.Second},
 		{"init-failure", executable, func(c *initConfig) {
 			c.Spec.Process.Cwd = "/minirunc-no-such-directory"
@@ -116,6 +125,40 @@ func TestStartInitWithCgroup(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(parent, "existing")); err != nil {
 		t.Fatalf("existing cgroup was removed: %v", err)
+	}
+}
+
+func TestStartInitSecurityFailureCleansCgroup(t *testing.T) {
+	if os.Getenv("MINIRUNC_PRIVILEGED_TESTS") != "1" {
+		t.Skip("set MINIRUNC_PRIVILEGED_TESTS=1 to test security failure cleanup")
+	}
+	if os.Getenv("MINIRUNC_CGROUP_SECURITY_CHILD") != "1" {
+		// bounding 只能缩小，必须在独立进程制造权限不足的场景。
+		command := exec.Command(os.Args[0], "-test.run=^TestStartInitSecurityFailureCleansCgroup$")
+		command.Env = append(os.Environ(), "MINIRUNC_CGROUP_SECURITY_CHILD=1")
+		if output, err := command.CombinedOutput(); err != nil {
+			t.Fatalf("security failure cleanup: %v\n%s", err, output)
+		}
+		return
+	}
+	parent := containerTestCgroupParent(t)
+	executable := buildInitExecutable(t)
+	config := ubuntuInitConfig(t)
+	config.CgroupParent = parent
+	config.Spec.Linux.CgroupsPath = "security-failure"
+	config.Spec.Linux.Resources = testCgroupResources()
+	config.Spec.Process.Capabilities = &specs.LinuxCapabilities{Bounding: []string{"CAP_CHOWN"}}
+	runtime.LockOSThread()
+	if err := unix.Prctl(unix.PR_CAPBSET_DROP, unix.CAP_CHOWN, 0, 0, 0); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := startInit(ctx, executable, config); err == nil || !strings.Contains(err.Error(), "inherited bounding") {
+		t.Fatalf("unavailable bounding capability: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(parent, "security-failure")); !os.IsNotExist(err) {
+		t.Fatalf("cgroup remains after security failure: %v", err)
 	}
 }
 

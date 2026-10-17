@@ -37,6 +37,9 @@ func ValidateSpec(config *specs.Spec) error {
 		}
 	}
 	if config.Linux != nil {
+		if err := ValidateSeccomp(config.Linux.Seccomp); err != nil {
+			problems = append(problems, err)
+		}
 		problems = append(problems, validateNamespaces(config.Linux.Namespaces)...)
 		for i, value := range config.Linux.MaskedPaths {
 			if !absolutePath(value) {

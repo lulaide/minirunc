@@ -47,6 +47,14 @@ func runInit() int {
 	if err == nil {
 		err = setupInit(config, parentMount, parentUTS)
 	}
+	if err == nil && config.Spec.Linux.Seccomp != nil {
+		// 这个标记只表示进入 seccomp 阶段，不证明过滤器已经安装成功。
+		// 过滤器可能阻止后续 write、close 或退出，父进程不能把失联误认为 Ready。
+		if err := writeInitMessage(resultWrite, initResult{Stage: "seccomp"}); err != nil {
+			return 1
+		}
+		err = linux.SetupSeccomp(config.Spec.Linux.Seccomp)
+	}
 	if err != nil {
 		// 错误通过结果管道交给父进程，不在子进程重复打印日志。
 		_ = writeInitMessage(resultWrite, initResult{Error: err.Error()})

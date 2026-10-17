@@ -15,3 +15,4 @@
 - 不在日志中记录环境变量值、凭据或其他敏感数据。
 - 代码注释使用中文，只在逻辑不直观时说明原因、约束或系统调用语义，不逐行复述代码。
 - 只在开始实现对应能力时增加目录、接口和命令文件，不提前创建空结构。
+- seccomp 使用 libseccomp-golang；构建需要启用 CGO，并提供 C 编译器、pkg-config 和 libseccomp 开发包（Debian/Ubuntu 为 `libseccomp-dev`）。

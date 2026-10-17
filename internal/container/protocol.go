@@ -23,13 +23,14 @@ type initConfig struct {
 
 // Ready 表示当前初始化步骤成功，不等同于 OCI running 状态。
 // 成功时 Ready=true 且 Error 为空；失败时 Ready=false 且 Error 非空。
-// 独立传输结果，避免把空消息或子进程退出误认为成功。
+// 可先发送 Stage=seccomp 的阶段消息，它不能携带 Ready 或 Error，也不能代替最终结果。
 type initResult struct {
 	Ready bool   `json:"ready"`
 	Error string `json:"error,omitempty"`
+	Stage string `json:"stage,omitempty"`
 }
 
-// 写完消息后，调用方必须关闭管道写端。这里不关闭，因为管道的创建和
+// 完成全部消息后，调用方必须关闭管道写端。这里不关闭，因为管道的创建和
 // 生命周期属于调用方；writeInitMessage 只负责 JSON 编码和写入。
 func writeInitMessage(writer io.Writer, message any) error {
 	if err := json.NewEncoder(writer).Encode(message); err != nil {
@@ -60,24 +61,46 @@ func validateInitConfig(config *initConfig) error {
 }
 
 func readInitResult(reader io.Reader) (*initResult, error) {
-	var result *initResult
-	if err := readInitMessage(reader, &result); err != nil {
-		return nil, err
+	decoder := json.NewDecoder(reader)
+	seccompStage := false
+	for {
+		var result *initResult
+		if err := decoder.Decode(&result); err != nil {
+			if seccompStage {
+				return nil, fmt.Errorf("init result: seccomp stage did not confirm readiness (filter may block post-load initialization): %w", err)
+			}
+			return nil, fmt.Errorf("read init result: %w", err)
+		}
+		if result == nil {
+			return nil, errors.New("init result: expected a JSON object")
+		}
+		if result.Stage != "" {
+			if result.Stage != "seccomp" || seccompStage || result.Ready || result.Error != "" {
+				return nil, errors.New("init result: invalid stage message")
+			}
+			seccompStage = true
+			continue
+		}
+		if result.Ready && result.Error != "" {
+			return nil, errors.New("init result: ready result must not contain an error")
+		}
+		if !result.Ready && result.Error == "" {
+			return nil, errors.New("init result: failed result must contain an error")
+		}
+		// 最终结果之后只能是 EOF，不能接受第二份结果或额外阶段消息。
+		var extra any
+		if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
+			if err != nil {
+				return nil, fmt.Errorf("read init result trailing data: %w", err)
+			}
+			return nil, errors.New("init result: unexpected message after final result")
+		}
+		return result, nil
 	}
-	if result == nil {
-		return nil, errors.New("init result: expected a JSON object")
-	}
-	if result.Ready && result.Error != "" {
-		return nil, errors.New("init result: ready result must not contain an error")
-	}
-	if !result.Ready && result.Error == "" {
-		return nil, errors.New("init result: failed result must contain an error")
-	}
-	return result, nil
 }
 
 func readInitMessage(reader io.Reader, message any) error {
-	// 每条管道只传一份消息。读取到 EOF 表示发送方已关闭写端，整份消息
+	// 配置管道只传一份消息。读取到 EOF 表示发送方已关闭写端，整份消息
 	// 已经传完；因此截断的 JSON、空管道和连续两份 JSON 都会解析失败。
 	data, err := io.ReadAll(reader)
 	if err != nil {

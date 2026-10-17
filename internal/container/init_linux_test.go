@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/lulaide/minirunc/internal/cgroup"
+	"github.com/lulaide/minirunc/internal/linux"
 	specs "github.com/opencontainers/runtime-spec/specs-go"
 	"golang.org/x/sys/unix"
 )
@@ -113,6 +114,12 @@ func TestSetupInitWithUbuntuBundle(t *testing.T) {
 		if err := setupInit(config, os.NewFile(parentMountFD, "parent-mnt"), os.NewFile(parentUTSFD, "parent-uts")); err != nil {
 			t.Fatal(err)
 		}
+		if err := linux.SetupSeccomp(config.Spec.Linux.Seccomp); err != nil {
+			t.Fatal(err)
+		}
+		if _, _, errno := unix.RawSyscall(unix.SYS_GETPPID, 0, 0, 0); errno != unix.EPERM {
+			t.Fatalf("seccomp did not block getppid in Ubuntu init: %v", errno)
+		}
 		// Ubuntu bundle 配置空能力集合和 noNewPrivileges=true，检查锁定线程的实际状态。
 		header := unix.CapUserHeader{Version: unix.LINUX_CAPABILITY_VERSION_3}
 		var capabilities [2]unix.CapUserData
@@ -183,7 +190,7 @@ func TestSetupInitWithUbuntuBundle(t *testing.T) {
 		if _, err := os.Stat("/.minirunc-oldroot"); !errors.Is(err, os.ErrNotExist) {
 			t.Fatal("old root is still reachable")
 		}
-		t.Log("Ubuntu init checks passed: PID 1, hostname, rootfs, procfs, readonly and masked paths, user, groups, cwd, rlimits, capabilities, no_new_privs")
+		t.Log("Ubuntu init checks passed: PID 1, hostname, rootfs, procfs, readonly and masked paths, user, groups, cwd, rlimits, capabilities, no_new_privs, seccomp")
 		return
 	}
 	if os.Getenv("MINIRUNC_PRIVILEGED_TESTS") != "1" {
@@ -193,6 +200,11 @@ func TestSetupInitWithUbuntuBundle(t *testing.T) {
 	config.Spec.Process.User = specs.User{UID: 1000, GID: 1000, AdditionalGids: []uint32{1001, 1002}}
 	config.Spec.Process.Cwd = "/tmp"
 	config.Spec.Process.Rlimits = []specs.POSIXRlimit{{Type: "RLIMIT_NOFILE", Soft: 64, Hard: 128}}
+	// 在内存中添加测试策略，不改工作区持久化的 Ubuntu bundle。
+	config.Spec.Linux.Seccomp = &specs.LinuxSeccomp{
+		DefaultAction: specs.ActAllow,
+		Syscalls:      []specs.LinuxSyscall{{Names: []string{"getppid"}, Action: specs.ActErrno}},
+	}
 	var group *cgroup.Group
 	if os.Getenv("MINIRUNC_CGROUP_TEST_PARENT") != "" {
 		config.CgroupParent = containerTestCgroupParent(t)

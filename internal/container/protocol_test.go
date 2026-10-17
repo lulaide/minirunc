@@ -108,6 +108,36 @@ func TestInitProtocolPreservesIOErrors(t *testing.T) {
 	}
 }
 
+func TestInitSeccompStage(t *testing.T) {
+	for _, final := range []initResult{{Ready: true}, {Error: "load seccomp filter: permission denied"}} {
+		var buffer bytes.Buffer
+		if err := writeInitMessage(&buffer, initResult{Stage: "seccomp"}); err != nil {
+			t.Fatal(err)
+		}
+		if err := writeInitMessage(&buffer, final); err != nil {
+			t.Fatal(err)
+		}
+		got, err := readInitResult(&buffer)
+		if err != nil || *got != final {
+			t.Fatalf("result = %+v, error %v, want %+v", got, err, final)
+		}
+	}
+	if _, err := readInitResult(strings.NewReader(`{"stage":"seccomp"}`)); err == nil || !strings.Contains(err.Error(), "seccomp stage did not confirm readiness") {
+		t.Fatalf("stage-only message: %v", err)
+	}
+	for _, input := range []string{
+		`{"stage":"unknown"}`,
+		`{"stage":"seccomp","ready":true}`,
+		`{"stage":"seccomp","error":"error"}`,
+		`{"stage":"seccomp"}{"stage":"seccomp"}{"ready":true}`,
+		`{"ready":true}{"stage":"seccomp"}`,
+	} {
+		if _, err := readInitResult(strings.NewReader(input)); err == nil {
+			t.Fatalf("invalid stage sequence accepted: %s", input)
+		}
+	}
+}
+
 type failingIO struct{ err error }
 
 func (f failingIO) Read([]byte) (int, error)  { return 0, f.err }

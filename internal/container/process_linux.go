@@ -110,6 +110,14 @@ func startInit(ctx context.Context, executable string, config *initConfig) (retu
 	}
 	result, err := readInitResult(resultRead)
 	if err != nil {
+		// 没有有效最终结果就不能继续。立即终止仍存活的子进程并回收，
+		// 同时保留 SIGSYS 等退出信息，区分通信失败和过滤器实际杀死进程。
+		_ = child.Process.Kill()
+		waitErr := child.Wait()
+		waited = true
+		if waitErr != nil {
+			err = errors.Join(err, fmt.Errorf("reap init after protocol failure: %w", waitErr))
+		}
 		// 取消会终止子进程并使管道出现 EOF，同时保留 context 错误供上层识别。
 		return errors.Join(fmt.Errorf("receive init result: %w", err), ctx.Err())
 	}
